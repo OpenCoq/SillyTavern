@@ -12,6 +12,7 @@ import { color, getConfigValue, safeReadFileSync } from '../util.js';
 const whitelistPath = path.join(process.cwd(), './whitelist.txt');
 const enableForwardedWhitelist = !!getConfigValue('enableForwardedWhitelist', false, 'boolean');
 const whitelistDockerHosts = !!getConfigValue('whitelistDockerHosts', true, 'boolean');
+const allowForwardedInDev = !!getConfigValue('allowForwardedInDev', true, 'boolean');
 /** @type {string[]} */
 let whitelist = getConfigValue('whitelist', []);
 
@@ -47,6 +48,34 @@ function getForwardedIp(req) {
 
     // If none of the headers are available, return undefined
     return undefined;
+}
+
+/**
+ * Detects if running in a cloud development environment.
+ * @returns {boolean} True if running in a cloud development environment
+ */
+function isCloudDevelopmentEnvironment() {
+    // Gitpod environment
+    if (process.env.GITPOD_WORKSPACE_ID || process.env.GITPOD_HOST) {
+        return true;
+    }
+
+    // GitHub Codespaces
+    if (process.env.CODESPACES || process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN) {
+        return true;
+    }
+
+    // Replit
+    if (process.env.REPL_ID || process.env.REPL_SLUG) {
+        return true;
+    }
+
+    // StackBlitz
+    if (process.env.STACKBLITZ_HOST) {
+        return true;
+    }
+
+    return false;
 }
 
 /**
@@ -86,15 +115,35 @@ export default async function getWhitelistMiddleware() {
 
     await addDockerHostsToWhitelist();
 
+    const isCloudDev = isCloudDevelopmentEnvironment();
+    if (isCloudDev) {
+        console.info(color.green('Detected cloud development environment. Forwarded IP restrictions relaxed for local connections.'));
+    }
+
     return function (req, res, next) {
         const clientIp = getIpFromRequest(req);
         const forwardedIp = getForwardedIp(req);
         const userAgent = req.headers['user-agent'];
 
-        //clientIp = req.connection.remoteAddress.split(':').pop();
-        if (!whitelist.some(x => ipMatching.matches(clientIp, ipMatching.getMatch(x)))
-            || forwardedIp && !whitelist.some(x => ipMatching.matches(forwardedIp, ipMatching.getMatch(x)))
-        ) {
+        // Check if client IP is whitelisted
+        const clientIpWhitelisted = whitelist.some(x => ipMatching.matches(clientIp, ipMatching.getMatch(x)));
+
+        // Check if forwarded IP is whitelisted (if it exists)
+        const forwardedIpWhitelisted = !forwardedIp || whitelist.some(x => ipMatching.matches(forwardedIp, ipMatching.getMatch(x)));
+
+        // In cloud development environments, if the client IP is whitelisted (e.g., 127.0.0.1),
+        // allow the connection even if the forwarded IP is not whitelisted
+        let allowConnection = false;
+
+        if (isCloudDev && allowForwardedInDev && clientIpWhitelisted) {
+            // In cloud dev environments, allow connection if client IP is whitelisted
+            allowConnection = true;
+        } else {
+            // Standard behavior: require both IPs to be whitelisted
+            allowConnection = clientIpWhitelisted && forwardedIpWhitelisted;
+        }
+
+        if (!allowConnection) {
             // Log the connection attempt with real IP address
             const ipDetails = forwardedIp
                 ? `${clientIp} (forwarded from ${forwardedIp})`

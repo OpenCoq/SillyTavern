@@ -54,6 +54,9 @@ whitelist:
   - 127.0.0.1
 # Automatically whitelist Docker host and gateway IPs
 whitelistDockerHosts: true
+# Allow connections in cloud development environments (Gitpod, Codespaces, etc.)
+# when client IP is whitelisted, even if forwarded IP is not
+allowForwardedInDev: true
 # Toggle basic authentication for endpoints
 basicAuthMode: false
 # Basic authentication credentials
